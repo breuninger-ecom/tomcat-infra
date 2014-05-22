@@ -29,6 +29,26 @@ TOMCAT_PATH="$(echo $TOMCAT_PATH|sed '~s,/*$,,')"
 #### 
 #### HELPERS
 
+WHOAMI="$(whoami)"
+
+execute(){
+ local COMMAND="$1"
+ local TOMCAT_USER="$2"
+ if [ "$WHOAMI" = "$TOMCAT_USER" ];then
+        echo "[EXECUTE] sh -c \"$COMMAND\""
+        logger -t tomcat "$INSTANCENAME | sh -c \"$COMMAND\""
+        sh -c "$COMMAND"
+ elif [ "$WHOAMI" = "root" ];then
+        echo "[EXECUTE] su --login -c \"$COMMAND\" $TOMCAT_USER"
+        logger -t tomcat "$INSTANCENAME | su --login -c \"$COMMAND\" $TOMCAT_USER"
+        su --login -c "$COMMAND" $RUN_USER
+ else
+        echo "[EXECUTE] su --login -c \"$COMMAND\" $TOMCAT_USER :  Unable to execute, you are not root"
+        logger -t tomcat "$INSTANCENAME | ERROR: Unable to execute '$COMMAND', you are not root"
+ fi
+}
+
+
 usage(){
    cat <<EOF
 
@@ -172,14 +192,11 @@ fi
 ################################################################
 ###
 ### CHECK ROOT
-if [ "`whoami`" != "root" ];then
-    echo "INFO: RUN THIS SCRIPT AS ROOT OR BY USING 'sudo $0'"
-    exit 1
-fi
+
+
 
 TOMCAT_PIDS="$(tomcat_pids 2>/dev/null)"
 
-echo $TOMCAT_PIDS
 if [ "$COMMAND" == "status" ] || [ "$COMMAND" == "monitor" ];then
        for pid in $TOMCAT_PIDS;do
 	      RUNTIME="$(ps -p $pid ho etime |awk '{print $1}') $RUNTIME"
@@ -227,7 +244,7 @@ case "$COMMAND" in
     chmod -R $TOMCAT_PERMISSION $TOMCAT_LOGDIR
     echo
     echo "INVOKING: $TOMCAT_PATH/bin/startup.sh"
-    su --login -c "cd $TOMCAT_PATH ; bin/startup.sh" $TOMCAT_USER
+    execute "cd $TOMCAT_PATH ; bin/startup.sh" $TOMCAT_USER
     exit $?
     ;;
   run)
@@ -240,13 +257,13 @@ case "$COMMAND" in
     echo "INVOKING: $TOMCAT_PATH/bin/catalina.sh run"
     echo
     echo "STOP WITH: STRG + c"
-    su --login -c "cd $TOMCAT_PATH ; bin/catalina.sh run" $TOMCAT_USER
+    execute "cd $TOMCAT_PATH ; bin/catalina.sh run" $TOMCAT_USER
     ;;
   stop)
     echo "****************************************************************************************************"
     if [ -n "$TOMCAT_PIDS" ];then
       echo "INVOKING: $TOMCAT_PATH/bin/shutdown.sh"
-      su --login -c "cd $TOMCAT_PATH ; bin/shutdown.sh" $TOMCAT_USER
+      execute "cd $TOMCAT_PATH ; bin/shutdown.sh" $TOMCAT_USER
     else
       echo "<no corosponding process found>"
     fi

@@ -22,6 +22,9 @@ if [ -f /etc/sysconfig/tomcat-servers ];then
    source /etc/sysconfig/tomcat-servers
 fi
 
+
+TOMCAT_PATH="$(echo $TOMCAT_PATH|sed '~s,/*$,,')"
+
 ################################################################################
 #### 
 #### HELPERS
@@ -175,6 +178,8 @@ if [ "`whoami`" != "root" ];then
 fi
 
 TOMCAT_PIDS="$(tomcat_pids 2>/dev/null)"
+
+echo $TOMCAT_PIDS
 if [ "$COMMAND" == "status" ] || [ "$COMMAND" == "monitor" ];then
        for pid in $TOMCAT_PIDS;do
 	      RUNTIME="$(ps -p $pid ho etime |awk '{print $1}') $RUNTIME"

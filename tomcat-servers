@@ -1,0 +1,293 @@
+#!/bin/bash
+
+### BEGIN INIT INFO
+# Provides:          tomcat-servers
+# Required-Start:    $syslog $network $remote_fs
+# Required-Stop:     $syslog $network $remote_fs 
+# Default-Start:     3 5
+# Default-Stop:      0 1 2 6
+# Short-Description: tomcat daemon providing java services
+# Description:       Start tomcat to allow access to javaapps.
+### END INIT INFO
+
+# Copyright by ms-github@256bit.org
+# see: LICENSE file
+
+TOMCAT_INSTANCE_CONFIG="/etc/tomcat-servers.conf"
+TOMCAT_INSTANCE_DIR="/data/"
+HOSTNAME="$(hostname -f)"
+
+if [ -f /etc/sysconfig/tomcat-servers ];then
+   echo "SOURCING /etc/sysconfig/tomcat-servers"
+   source /etc/sysconfig/tomcat-servers
+fi
+
+################################################################################
+#### 
+#### HELPERS
+
+usage(){
+   cat <<EOF
+
+Usage: $0 {start|stop|kill|restart|status|run} all|<instance-name>
+
+Options:
+
+  stop    : stop instance
+  start   : start instances
+  kill    : send SIGKILL to the specified instance
+  restart : stop Server, wait 60 seconds for proper termination, start server
+  status  : show server status
+  run     : start tomcat in non-daemon mode 
+            (console, useful for debugging)
+
+Notes for SYS-V style boot:
+If this script is called by a SysV-Init Symlink named 
+/etc/rc.d/rc*.d/K*tomcat-servers or /etc/rc.d/rc*.d/S*tomcat-servers 
+all available servers are triggered.
+
+Available Instances on this host (see $TOMCAT_INSTANCE_CONFIG):
+----------
+<instance-dir/name>:<hostname-regex>:<logdir>:<run-user>:<group>:<permissions>
+$(
+cat $TOMCAT_INSTANCE_CONFIG|egrep -v "^#"|while read A;
+do
+ TOMCAT_REGEX="$(echo $A|cut -d ':' -f2)"
+ if ( echo "$HOSTNAME" | egrep -q "$TOMCAT_REGEX" );then
+   echo "$A"
+ fi
+done
+)
+----------
+
+EOF
+   exit 1
+
+}
+# Provides a list of tomcat PIDS
+tomcat_pids(){
+  echo "TOMCAT_PATH $TOMCAT_PATH" >&2
+  ps auxwwww|egrep "java.*catalina.home=${TOMCAT_PATH} "|grep -v grep|awk '{print $2}' | xargs 
+}
+
+################################################################################
+#### 
+#### MAIN
+
+if [ ! -f "$TOMCAT_INSTANCE_CONFIG" ];then
+  echo "ERROR: unable to find instance configuration : '$TOMCAT_INSTANCE_CONFIG'"
+fi
+
+# Execute this, if script is called while system init
+if (echo "$0"|egrep -q -- '/[S|K][0-9][0-9].*' );then
+   if ( [ -z "$1" ] );then
+	   usage
+   fi
+   COMMAND="$1"; shift
+   INSTANCE="all"
+   ADDARGS="$@"
+# All other cases
+else
+   if ( [ -z "$1" ] );then
+	   usage
+   fi
+   COMMAND="$1"; shift
+   INSTANCE="$1"; shift
+   # ask interactively i operation should really rexecuted for all instances in interactive shell sessions,
+   # otherwise asume that all instances should be processed
+   if [ -z "$INSTANCE" ]; then
+	if ( [ "$COMMAND" != "status" ] && [ -t 1 ] );then
+		echo "RUNNING IN INTERACTIVE MODE, THEREFORE I ASK YOU..."
+		read -p "Execute for all instances? (y/n) : " ASK
+		if [ "$ASK" = "y" ];then
+			INSTANCE="all"
+		fi
+	else
+			INSTANCE="all"
+	fi
+   fi
+   ADDARGS="$@"
+fi
+
+### Instance parameters are already known
+if (
+   [ -n "$TOMCAT_PATH" ] &&
+   [ -n "$TOMCAT_LOGDIR" ]&&
+   [ -n "$TOMCAT_USER" ] &&
+   [ -n "$TOMCAT_GROUP" ] &&
+   [ -n "$TOMCAT_LOGDIR" ] &&
+   [ -n "$TOMCAT_PERMISSION" ] &&
+   [ -n "$TOMCAT_LOGDIR" ] &&
+   [ -n "$TOMCAT_INSTANCE" ] 
+   );
+then
+     if ( !(echo "$TOMCAT_PATH"|egrep "^/"));then
+	   TOMCAT_PATH="${TOMCAT_INSTANCE_DIR}/$TOMCAT_PATH"
+      TOMCAT_PATH="$(echo "$TOMCAT_PATH"|sed '~s,//*,/,g')"
+     fi
+     echo "******************************************************************************"
+     echo "TOMCAT INSTANCE : $TOMCAT_INSTANCE"
+     echo "TOMCAT PATH     : $TOMCAT_PATH"
+     echo "TOMCAT LOGFILES : $TOMCAT_LOGDIR/tomcat/"
+     echo "COMMAND         : $0 $COMMAND $TOMCAT_INSTANCE"
+### The configuration needs to be parsed to gain instance configuration
+else
+  RET=0
+  COUNT=0
+  while read INSTANCE_DATA;
+  do
+     # <instance-dir>:<hostname-regex>:<logdir>:<run-user>:<group>:<permissions>
+     export TOMCAT_PATH="$(echo $INSTANCE_DATA|cut -d ':' -f1)"
+     export TOMCAT_REGEX="$(echo $INSTANCE_DATA|cut -d ':' -f2)"
+     export TOMCAT_LOGDIR="$(echo $INSTANCE_DATA|cut -d ':' -f3)"
+     export TOMCAT_USER="$(echo $INSTANCE_DATA|cut -d ':' -f4)"
+     export TOMCAT_GROUP="$(echo $INSTANCE_DATA|cut -d ':' -f5)"
+     export TOMCAT_PERMISSION="$(echo $INSTANCE_DATA|cut -d ':' -f6)"
+     export TOMCAT_INSTANCE="$(echo $TOMCAT_PATH|sed '~s,\\*$,,'|xargs basename)"
+
+     if [ "$INSTANCE" = "all" ];then
+	      INSTANCE=".*"
+     fi
+     if ( echo "$HOSTNAME" | egrep -q "${TOMCAT_REGEX}" );then
+	      if (echo "${TOMCAT_INSTANCE}" |egrep -q "^${INSTANCE}\$" );then
+                COUNT=$(( $COUNT + 1 ))
+		          $0 $COMMAND $TOMCAT_INSTANCE
+                EXITCODE="$?"
+		          echo
+	             if [ "$EXITCODE" != "0" ];then
+		               RET="$EXITCODE"
+                fi
+	   fi
+     fi
+  done < <(cat $TOMCAT_INSTANCE_CONFIG|egrep -v "^#.*")
+  if [ "$COUNT" == 0 ];then
+        exit 1
+  fi
+  exit $RET
+fi
+
+################################################################
+###
+### CHECK ROOT
+if [ "`whoami`" != "root" ];then
+    echo "INFO: RUN THIS SCRIPT AS ROOT OR BY USING 'sudo $0'"
+    exit 1
+fi
+
+TOMCAT_PIDS="$(tomcat_pids 2>/dev/null)"
+if [ "$COMMAND" == "status" ] || [ "$COMMAND" == "monitor" ];then
+       for pid in $TOMCAT_PIDS;do
+	      RUNTIME="$(ps -p $pid ho etime |awk '{print $1}') $RUNTIME"
+       done
+       if [ -n "$TOMCAT_PIDS" ];then
+        echo "STATUS          : RUNNING (PID $TOMCAT_PIDS, RUNTIME $RUNTIME)"
+        exit 0
+       else
+        echo "STATUS          : STOPPED"
+        exit 1
+       fi
+fi
+
+# Create a lockfile
+LOCK_FILE="$TOMCAT_LOGDIR/tomcat-servers.lock"
+if ( ! ( set -C; : > $LOCK_FILE 2> /dev/null ) );then
+  echo "Already running"
+  exit 1
+fi
+trap "rm -f $LOCK_FILE; echo removed $LOCK_FILE" EXIT TERM INT
+
+
+case "$COMMAND" in
+  start)
+
+    if [ -n "$TOMCAT_PIDS" ];then
+        echo
+	echo "WARNING: Instance is already running, skipping start"
+	exit 0
+    fi
+    echo
+    echo "****************************************************************************************************"
+    echo "FIXING PERMISSIONS IN $TOMCAT_LOGDIR"
+    if [ -z "$TOMCAT_LOGDIR" ] ; then
+	echo "ERROR: TOMCAT_LOGDIR not defined this should never happen"
+	exit 1
+    fi
+    if ( !( echo "$TOMCAT_LOGDIR"|egrep -q "^/.+/.+" ));then
+	echo "ERROR: TOMCAT_LOGDIR $TOMCAT_LOGDIR looks dangerous"
+	exit 1
+    fi
+    # This should happen in setenv.sh, for security we fix the permissions here
+    mkdir -p $TOMCAT_LOGDIR
+    chown -R $TOMCAT_USER:$TOMCAT_GROUP $TOMCAT_LOGDIR
+    chmod -R $TOMCAT_PERMISSION $TOMCAT_LOGDIR
+    echo
+    echo "INVOKING: $TOMCAT_PATH/bin/startup.sh"
+    su --login -c "cd $TOMCAT_PATH ; bin/startup.sh" $TOMCAT_USER
+    exit $?
+    ;;
+  run)
+    if [ -n "$TOMCAT_PIDS" ];then
+        echo
+	echo "ERROR: Instance is already running, unable to start"
+	exit 1
+    fi
+    echo "****************************************************************************************************"
+    echo "INVOKING: $TOMCAT_PATH/bin/catalina.sh run"
+    echo
+    echo "STOP WITH: STRG + c"
+    su --login -c "cd $TOMCAT_PATH ; bin/catalina.sh run" $TOMCAT_USER
+    ;;
+  stop)
+    echo "****************************************************************************************************"
+    if [ -n "$TOMCAT_PIDS" ];then
+      echo "INVOKING: $TOMCAT_PATH/bin/shutdown.sh"
+      su --login -c "cd $TOMCAT_PATH ; bin/shutdown.sh" $TOMCAT_USER
+    else
+      echo "<no corosponding process found>"
+    fi
+    exit $?
+    ;;
+
+  kill)
+    echo "****************************************************************************************************"
+    if [ -n "$TOMCAT_PIDS" ];then
+       ps auxwwww|grep "catalina.home=${TOMCAT_PATH}"
+       echo "Sending SIGQUIT to the following pids $TOMCAT_PIDS "
+       echo "(stacktraces of all threads should appear catalina.out for debugging purposes)"
+       kill -QUIT $TOMCAT_PIDS &
+       sleep 2
+       echo "Sending SIGKILL to the following pids $TOMCAT_PIDS"
+       kill -KILL $TOMCAT_PIDS
+    else
+       echo "<no corosponding processes found>"
+    fi
+    echo
+    ;;
+
+  restart)
+    rm -f $LOCK_FILE
+    trap "exit 1" EXIT TERM INT
+    $0 stop $TOMCAT_INSTANCE
+    for ((i=12; i>0; i--));
+    do
+      TOMCAT_PIDS="$(tomcat_pids 2>/dev/null)"
+      if [ -z "$TOMCAT_PIDS" ];then
+	break	
+      fi
+      sleep 5
+      echo "INFO: Still running, timeout in $(($i * 5)) seconds"
+    done
+    TOMCAT_PIDS="$(tomcat_pids 2>/dev/null)"
+    if [ -n "$TOMCAT_PIDS" ];then
+      echo "ERROR: unable to shutdown"
+      exit 1
+    fi
+    $0 start $TOMCAT_INSTANCE
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac
+
+exit 0

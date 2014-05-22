@@ -1,0 +1,5 @@
+# <instance-dir>:<hostname-regex>:<logdir>:<run-user>:<group>:<permissions>
+# 
+# example:
+# /data/apache-tomcat-8.0.8-foo-service/:.*:/data/logs/foo-service:tomcat:tomcat:755
+
